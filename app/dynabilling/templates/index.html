@@ -1,0 +1,376 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dynatrace Billing</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --text: #0b0b0b; --text-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --s1:#2a78d6; --s2:#eb6834; --s3:#1baf7a; --s4:#eda100; --s5:#e87ba4; --s6:#008300; --s7:#6250d6; --s8:#e34948;
+  --good:#0ca30c; --warning:#fab219; --critical:#d03b3b; --good-text:#006300;
+  --accent: #2a78d6;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page:#0d0d0d; --surface:#1a1a19; --text:#f0efec; --text-2:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --axis:#383835; --border: rgba(255,255,255,0.10);
+    --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+    --good-text:#0ca30c; --accent:#3987e5;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page:#0d0d0d; --surface:#1a1a19; --text:#f0efec; --text-2:#c3c2b7; --muted:#898781;
+  --grid:#2c2c2a; --axis:#383835; --border: rgba(255,255,255,0.10);
+  --s1:#3987e5; --s2:#d95926; --s3:#199e70; --s4:#c98500; --s5:#d55181; --s6:#008300; --s7:#9085e9; --s8:#e66767;
+  --good-text:#0ca30c; --accent:#3987e5;
+}
+* { box-sizing: border-box; }
+body { margin:0; background:var(--page); color:var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+.wrap { max-width: 1280px; margin: 0 auto; padding: 24px 16px 64px; }
+header { display:flex; justify-content:space-between; align-items:baseline; gap:16px; flex-wrap:wrap; margin-bottom: 20px; }
+h1 { font-size: 20px; margin:0; }
+h2 { font-size: 15px; margin: 0 0 12px; }
+.sub { color: var(--text-2); font-size: 13px; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 16px; }
+.verdict { display:flex; gap:16px; align-items:center; margin-bottom: 16px; flex-wrap: wrap; }
+.verdict .big { font-size: 34px; font-weight: 650; line-height:1.1; }
+.verdict .text { flex:1; min-width: 240px; color: var(--text-2); }
+.verdict .text strong { color: var(--text); }
+.badge { display:inline-flex; align-items:center; gap:6px; padding: 3px 10px; border-radius: 999px;
+  font-weight: 600; font-size: 13px; border:1px solid var(--border); }
+.badge .dot { width:10px; height:10px; border-radius:50%; }
+.tiles { display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 16px; }
+.tile .label { color: var(--text-2); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; }
+.tile .value { font-size: 22px; font-weight: 650; margin-top: 4px; }
+.tile .hint { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.meter { height: 8px; background: var(--grid); border-radius: 4px; position: relative; margin-top: 10px; overflow: visible; }
+.meter > span { position:absolute; left:0; top:0; bottom:0; background: var(--accent); border-radius: 4px; }
+.meter > i { position:absolute; top:-4px; bottom:-4px; width:2px; background: var(--text); }
+.filters { display:flex; gap: 12px; flex-wrap: wrap; align-items: end; margin-bottom: 16px; }
+.filters label { display:flex; flex-direction:column; gap:4px; font-size: 12px; color: var(--text-2); }
+input, select, button { font: inherit; color: var(--text); background: var(--surface); border:1px solid var(--axis);
+  border-radius: 6px; padding: 6px 8px; }
+select[multiple] { min-width: 200px; height: 74px; }
+button { cursor:pointer; }
+button.preset.active { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+.grid2 { display:grid; grid-template-columns: 3fr 2fr; gap: 16px; margin-bottom: 16px; }
+@media (max-width: 900px) { .grid2 { grid-template-columns: 1fr; } .tiles { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px) { .tiles { grid-template-columns: 1fr; } }
+.chart-box { position: relative; height: 340px; }
+.legend { display:flex; flex-wrap:wrap; gap: 6px 14px; margin-bottom: 8px; font-size: 12px; color: var(--text-2); }
+.legend span { display:inline-flex; align-items:center; gap:6px; }
+.legend i { width:10px; height:10px; border-radius:2px; display:inline-block; }
+.legend i.line { height:0; border-top: 2px dashed var(--text); border-radius:0; width: 16px; }
+.table-wrap { overflow:auto; max-height: 460px; }
+table { width:100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align:left; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+th { position: sticky; top:0; background: var(--surface); color: var(--text-2); font-weight: 600; }
+td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
+.warn { background: color-mix(in srgb, var(--warning) 18%, var(--surface)); border:1px solid var(--warning);
+  border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
+.row-actions { display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
+a { color: var(--accent); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>Dynatrace Billing</h1>
+      <div class="sub" id="subinfo">carregando…</div>
+    </div>
+    <div class="sub" id="runinfo"></div>
+  </header>
+
+  <div id="notice"></div>
+
+  <section class="card verdict" id="verdict" hidden>
+    <div>
+      <div class="sub" id="v-label">Média recente vs. média diária permitida</div>
+      <div class="big" id="v-pct">–</div>
+    </div>
+    <div class="text" id="v-text"></div>
+    <div id="v-badge"></div>
+  </section>
+
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card filters">
+    <label>De <input type="date" id="f-start"></label>
+    <label>Até <input type="date" id="f-end"></label>
+    <div style="display:flex; gap:6px; align-self:end;">
+      <button class="preset" data-days="7">7d</button>
+      <button class="preset active" data-days="30">30d</button>
+      <button class="preset" data-days="90">90d</button>
+      <button class="preset" data-days="contract">Contrato</button>
+    </div>
+    <label>Ambientes <select id="f-env" multiple></select></label>
+    <label>Recursos <select id="f-cap" multiple></select></label>
+    <button id="f-clear" style="align-self:end;">Limpar filtros</button>
+  </section>
+
+  <section class="grid2">
+    <div class="card">
+      <h2>Custo diário por ambiente (R$)</h2>
+      <div class="legend" id="legend-daily"></div>
+      <div class="chart-box"><canvas id="ch-daily" aria-label="Custo diário por ambiente"></canvas></div>
+    </div>
+    <div class="card">
+      <h2>Custo por recurso no período (R$)</h2>
+      <div class="chart-box"><canvas id="ch-cap" aria-label="Custo por recurso"></canvas></div>
+    </div>
+  </section>
+
+  <section class="card" style="margin-bottom:16px;">
+    <h2>Ambiente × recurso no período</h2>
+    <div class="table-wrap"><table id="t-matrix"></table></div>
+  </section>
+
+  <section class="card">
+    <div class="row-actions">
+      <h2 style="margin:0;">Detalhe diário</h2>
+      <a id="csv" href="#">Exportar CSV</a>
+    </div>
+    <div class="table-wrap"><table id="t-rows"></table></div>
+  </section>
+</div>
+
+<script>
+const BRL = new Intl.NumberFormat('pt-BR', {style:'currency', currency:'BRL'});
+const NUM = new Intl.NumberFormat('pt-BR', {maximumFractionDigits: 2});
+const PCT = v => v == null ? '–' : NUM.format(v) + '%';
+const brl = v => v == null ? '–' : BRL.format(v);
+const fmtDate = s => s ? s.split('-').reverse().join('/') : '–';
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+const STATUS = {
+  ok:       {label:'Dentro da média', color:'--good',     icon:'✓'},
+  warning:  {label:'Acima da média (até 10%)', color:'--warning', icon:'!'},
+  critical: {label:'Acima da média', color:'--critical', icon:'✕'},
+  unknown:  {label:'Sem referência', color:'--muted', icon:'?'},
+};
+function badge(st) {
+  const s = STATUS[st] || STATUS.unknown;
+  return `<span class="badge"><span class="dot" style="background:var(${s.color})"></span>${s.icon} ${s.label}</span>`;
+}
+
+let summary = null, filterMeta = null, envColor = {};
+const charts = {};
+
+async function j(url) { const r = await fetch(url); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+
+function params() {
+  const p = new URLSearchParams();
+  const s = document.getElementById('f-start').value, e = document.getElementById('f-end').value;
+  if (s) p.append('start', s); if (e) p.append('end', e);
+  for (const o of document.getElementById('f-env').selectedOptions) p.append('env', o.value);
+  for (const o of document.getElementById('f-cap').selectedOptions) p.append('cap', o.value);
+  return p;
+}
+
+function setPreset(days) {
+  document.querySelectorAll('.preset').forEach(b => b.classList.toggle('active', b.dataset.days == days));
+  const max = filterMeta?.max_date ? new Date(filterMeta.max_date + 'T00:00:00') : new Date();
+  const iso = d => d.toISOString().slice(0, 10);
+  let start;
+  if (days === 'contract') start = summary?.contract_start || filterMeta?.min_date;
+  else { const d = new Date(max); d.setDate(d.getDate() - (+days - 1)); start = iso(d); }
+  document.getElementById('f-start').value = start || '';
+  document.getElementById('f-end').value = iso(max);
+}
+
+function tile(label, value, hint, extra='') {
+  return `<div class="card tile"><div class="label">${label}</div><div class="value">${value}</div>
+          ${hint ? `<div class="hint">${hint}</div>` : ''}${extra}</div>`;
+}
+
+function cmpHint(c) {
+  if (c.pct_of_allowed == null) return '';
+  const word = c.diff_brl > 0 ? 'acima' : 'abaixo';
+  return `${PCT(c.pct_of_allowed)} da média permitida · ${brl(Math.abs(c.diff_brl))} ${word}`;
+}
+
+function renderSummary(s) {
+  const notice = document.getElementById('notice');
+  if (!s.configured) {
+    notice.innerHTML = `<div class="warn">Avaliação de orçamento indisponível. Pendências: <strong>${s.missing.map(esc).join(', ')}</strong>.
+      Configure no <code>.env</code> e/ou rode o coletor.</div>`;
+    document.getElementById('subinfo').textContent = 'Sem dados de contrato';
+    return;
+  }
+  document.getElementById('subinfo').textContent =
+    `${s.subscription.name || s.subscription.uuid} · contrato ${fmtDate(s.contract_start)} → ${fmtDate(s.contract_end)} · ` +
+    `câmbio ${s.currency}→BRL ${NUM.format(s.fx_rate)} (${s.fx_source}${s.fx_date ? ' ' + fmtDate(s.fx_date) : ''})`;
+  if (s.last_run) document.getElementById('runinfo').textContent =
+    `Última coleta: ${new Date(s.last_run.started_at).toLocaleString('pt-BR')} · ${s.last_run.status}`;
+  if (s.coverage_warning) notice.innerHTML = `<div class="warn">Os dados coletados começam em ${fmtDate(s.data_from)}, depois do início do contrato
+    (${fmtDate(s.contract_start)}). O consumido pode estar subestimado; rode o coletor com <code>--from ${s.contract_start}</code>.</div>`;
+
+  const a7 = s.main, w = s.main_window, wl = w === 1 ? 'último dia' : `últimos ${w} dias`;
+  const avgs = s.averages;
+  document.getElementById('verdict').hidden = false;
+  document.getElementById('v-label').textContent = `Média dos ${wl} vs. média diária permitida`;
+  document.getElementById('v-pct').textContent = PCT(a7.pct_of_allowed);
+  document.getElementById('v-badge').innerHTML = badge(a7.status);
+  document.getElementById('v-text').innerHTML =
+    `Para terminar o contrato em <strong>${fmtDate(s.contract_end)}</strong> sem estourar, você pode gastar em média
+     <strong>${brl(s.allowed_daily_brl)}/dia</strong> (saldo de ${brl(s.remaining_brl)} ÷ ${s.days_remaining} dias).
+     Sua média dos ${wl} é <strong>${brl(a7.cost_brl)}/dia</strong>,
+     ${a7.diff_brl > 0 ? 'ou seja, ' + brl(a7.diff_brl) + '/dia <strong>acima</strong>' : brl(Math.abs(a7.diff_brl)) + '/dia <strong>abaixo</strong>'} do limite.
+     ${s.exhaustion_date && s.exhaustion_date < s.contract_end
+        ? `Nesse ritmo, os créditos acabam em <strong>${fmtDate(s.exhaustion_date)}</strong>.`
+        : `Nesse ritmo, sobram ~<strong>${brl(s.projected_balance_brl)}</strong> no fim do contrato.`}`;
+
+  const usedPct = Math.min(s.pct_used ?? 0, 100), timePct = Math.min(s.pct_time_elapsed ?? 0, 100);
+  document.getElementById('tiles').innerHTML = [
+    tile('Saldo restante', brl(s.remaining_brl), `de ${brl(s.total_brl)} · ${PCT(100 - s.pct_used)} restante`),
+    tile('Média diária permitida', brl(s.allowed_daily_brl),
+      `saldo ÷ ${s.days_remaining} dias restantes (após ${fmtDate(s.last_complete_day)})`),
+    tile(`Custo em ${fmtDate(s.last_complete_day)}`, brl(s.last_day.cost_brl), cmpHint(s.last_day)),
+    ...Object.keys(avgs).map(Number).sort((a, b) => a - b).map(k =>
+      tile(`Média ${k} dias${k === w ? ' · referência' : ''}`, brl(avgs[k].cost_brl), cmpHint(avgs[k]))),
+    tile('Consumido vs. tempo', `${PCT(s.pct_used)}`, `dos créditos usados · ${PCT(s.pct_time_elapsed)} do contrato decorrido`,
+      `<div class="meter" title="barra: créditos consumidos · marcador: tempo decorrido"><span style="width:${usedPct}%"></span><i style="left:${timePct}%"></i></div>`),
+    tile(`Projeção no fim (ritmo ${w}d)`, PCT(s.projected_pct_of_total),
+      `do total · saldo final ${brl(s.projected_balance_brl)}`),
+  ].join('');
+}
+
+function assignColors(envs) {
+  const slots = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+  envColor = {};
+  [...envs].sort((a, b) => a.id.localeCompare(b.id)).forEach((e, i) => envColor[e.id] = i < 7 ? slots[i] : '--s8');
+}
+
+async function loadFilters() {
+  filterMeta = await j('/api/filters');
+  assignColors(filterMeta.environments);
+  const fill = (id, items) => document.getElementById(id).innerHTML =
+    items.map(x => `<option value="${esc(x.id)}">${esc(x.name)}</option>`).join('');
+  fill('f-env', filterMeta.environments);
+  fill('f-cap', filterMeta.capabilities);
+}
+
+function baseOpts() {
+  return {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    plugins: { legend: { display: false },
+      tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${brl(c.parsed.y ?? c.parsed.x)}` } } },
+  };
+}
+
+async function loadDaily() {
+  const d = await j('/api/daily?' + params());
+  // > 8 ambientes: mantém os 7 maiores e agrupa o resto em "Outros"
+  let series = d.series.map(s => ({...s, total: s.values.reduce((a, b) => a + b, 0)})).sort((a, b) => b.total - a.total);
+  if (series.length > 8) {
+    const rest = series.slice(7);
+    series = series.slice(0, 7).concat([{ id: '__other', name: 'Outros',
+      values: d.days.map((_, i) => rest.reduce((a, s) => a + s.values[i], 0)) }]);
+  }
+  const surface = css('--surface');
+  const datasets = series.map(s => ({
+    type: 'bar', label: s.name, data: s.values, stack: 'cost',
+    backgroundColor: css(s.id === '__other' ? '--muted' : envColor[s.id] || '--s8'),
+    borderColor: surface, borderWidth: { top: 2 }, borderSkipped: 'bottom',
+  }));
+  if (summary?.configured) {
+    datasets.push({ type: 'line', label: 'Média diária permitida (hoje)', data: d.days.map(() => summary.allowed_daily_brl),
+      borderColor: css('--text'), borderDash: [6, 4], borderWidth: 2, pointRadius: 0, pointHitRadius: 0 });
+  }
+  document.getElementById('legend-daily').innerHTML =
+    series.map(s => `<span><i style="background:var(${s.id === '__other' ? '--muted' : envColor[s.id]})"></i>${esc(s.name)}</span>`).join('') +
+    (summary?.configured ? `<span><i class="line"></i>Média diária permitida (${brl(summary.allowed_daily_brl)})</span>` : '');
+
+  const opts = baseOpts();
+  opts.interaction = { mode: 'index', intersect: false };
+  opts.plugins.tooltip.callbacks.title = items => fmtDate(items[0].label);
+  opts.plugins.tooltip.callbacks.footer = items =>
+    'Total: ' + brl(items.filter(i => i.dataset.type === 'bar').reduce((a, i) => a + i.parsed.y, 0));
+  opts.scales = {
+    x: { stacked: true, grid: { display: false }, border: { color: css('--axis') },
+         ticks: { color: css('--muted'), maxRotation: 0, autoSkipPadding: 16, callback(v) { return fmtDate(this.getLabelForValue(v)).slice(0, 5); } } },
+    y: { stacked: true, beginAtZero: true, grid: { color: css('--grid') }, border: { display: false },
+         ticks: { color: css('--muted'), callback: v => BRL.format(v).replace(',00', '') } },
+  };
+  charts.daily?.destroy();
+  charts.daily = new Chart(document.getElementById('ch-daily'), { data: { labels: d.days, datasets }, options: opts });
+}
+
+async function loadBreakdown() {
+  const b = await j('/api/breakdown?' + params());
+  const caps = b.by_capability.slice(0, 12);
+  const opts = baseOpts();
+  opts.indexAxis = 'y';
+  opts.scales = {
+    x: { beginAtZero: true, grid: { color: css('--grid') }, border: { display: false },
+         ticks: { color: css('--muted'), maxRotation: 0, maxTicksLimit: 5,
+                  callback: v => 'R$ ' + new Intl.NumberFormat('pt-BR', {notation: 'compact'}).format(v) } },
+    y: { grid: { display: false }, ticks: { color: css('--text-2'), callback(v) { const l = this.getLabelForValue(v); return l.length > 32 ? l.slice(0, 31) + '…' : l; } } },
+  };
+  charts.cap?.destroy();
+  charts.cap = new Chart(document.getElementById('ch-cap'), {
+    type: 'bar',
+    data: { labels: caps.map(c => c.name), datasets: [{ label: 'Custo', data: caps.map(c => c.cost_brl),
+      backgroundColor: css('--s1'), borderRadius: 4, borderSkipped: 'start', barPercentage: 0.7 }] },
+    options: opts,
+  });
+
+  const total = b.matrix.reduce((a, r) => a + r.cost_brl, 0);
+  // contrato já em BRL: a coluna na moeda original seria idêntica à de R$
+  const showOrig = !!b.currency && b.currency.toUpperCase() !== 'BRL';
+  document.getElementById('t-matrix').innerHTML =
+    `<thead><tr><th>Ambiente</th><th>Recurso</th><th class="num">Uso</th><th>Unidade</th>
+      ${showOrig ? `<th class="num">Custo (${esc(b.currency)})</th>` : ''}<th class="num">Custo (R$)</th><th class="num">% do período</th></tr></thead><tbody>` +
+    b.matrix.map(r => `<tr><td>${esc(r.env_name)}</td><td>${esc(r.cap_name)}</td><td class="num">${NUM.format(r.usage_value)}</td>
+      <td>${esc(r.unit || '')}</td>${showOrig ? `<td class="num">${NUM.format(r.cost)}</td>` : ''}<td class="num">${brl(r.cost_brl)}</td>
+      <td class="num">${PCT(total ? r.cost_brl / total * 100 : 0)}</td></tr>`).join('') +
+    `<tr><th colspan="${showOrig ? 5 : 4}">Total</th><th class="num">${brl(total)}</th><th class="num">100%</th></tr></tbody>`;
+}
+
+async function loadRows() {
+  const p = params();
+  document.getElementById('csv').href = '/api/export.csv?' + p;
+  const rows = await j('/api/rows?' + p);
+  const showOrig = rows.some(r => r.currency && r.currency.toUpperCase() !== 'BRL');
+  document.getElementById('t-rows').innerHTML =
+    `<thead><tr><th>Data</th><th>Ambiente</th><th>Recurso</th><th class="num">Uso</th><th>Unidade</th>
+      ${showOrig ? '<th class="num">Custo</th>' : ''}<th class="num">Custo (R$)</th></tr></thead><tbody>` +
+    rows.map(r => `<tr><td>${fmtDate(r.usage_date)}</td><td>${esc(r.environment_name)}</td><td>${esc(r.capability_name)}</td>
+      <td class="num">${NUM.format(r.usage_value)}</td><td>${esc(r.usage_unit || '')}</td>
+      ${showOrig ? `<td class="num">${NUM.format(r.cost)} ${esc(r.currency || '')}</td>` : ''}<td class="num">${brl(r.cost_brl)}</td></tr>`).join('') +
+    (rows.length >= 500 ? `<tr><td colspan="${showOrig ? 7 : 6}" class="sub">Mostrando 500 linhas — use o CSV para o período completo.</td></tr>` : '') +
+    '</tbody>';
+}
+
+function refresh() { return Promise.all([loadDaily(), loadBreakdown(), loadRows()]).catch(e => console.error(e)); }
+
+document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => { setPreset(b.dataset.days); refresh(); }));
+['f-start', 'f-end'].forEach(id => document.getElementById(id).addEventListener('change', () => {
+  document.querySelectorAll('.preset').forEach(b => b.classList.remove('active')); refresh(); }));
+['f-env', 'f-cap'].forEach(id => document.getElementById(id).addEventListener('change', refresh));
+document.getElementById('f-clear').addEventListener('click', () => {
+  ['f-env', 'f-cap'].forEach(id => [...document.getElementById(id).options].forEach(o => o.selected = false));
+  setPreset(30); refresh();
+});
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', refresh);
+
+(async () => {
+  try {
+    [summary] = await Promise.all([j('/api/summary'), loadFilters()]);
+    renderSummary(summary);
+  } catch (e) { document.getElementById('notice').innerHTML = `<div class="warn">Erro: ${esc(e.message)}</div>`; }
+  setPreset(30);
+  refresh();
+})();
+</script>
+</body>
+</html>
