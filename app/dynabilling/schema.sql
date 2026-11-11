@@ -58,3 +58,13 @@ CREATE TABLE IF NOT EXISTS collector_runs (
     rows_upserted INT          NOT NULL DEFAULT 0,
     message      TEXT          NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Usuários da interface web (também criada automaticamente pelo app ao iniciar)
+CREATE TABLE IF NOT EXISTS users (
+    id            INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    username      VARCHAR(64)  NOT NULL UNIQUE,
+    password_hash VARCHAR(255) NOT NULL,
+    active        TINYINT(1)   NOT NULL DEFAULT 1,
+    created_at    TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_login    TIMESTAMP    NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

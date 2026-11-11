@@ -17,6 +17,7 @@ Coleta o billing diário da sua conta Dynatrace (Dynatrace Platform Subscription
 ```bash
 cp .env.example .env      # preencha DT_ACCOUNT_UUID e o token
 docker compose up -d --build
+docker compose exec web python -m dynabilling.auth add <seu-usuario>   # cria o primeiro login
 open http://localhost:8000
 ```
 
@@ -125,9 +126,30 @@ Filtros disponíveis: período, ambientes e recursos.
 | `GET /api/rows?...&limit` | Linhas detalhadas |
 | `GET /api/export.csv?...` | CSV (separador `;`) |
 
+## Autenticação da interface web
+
+Todas as páginas e rotas `/api` exigem login. Só `/login` e `/health` são públicas.
+
+- **Usuários:** ficam na tabela `users` do MySQL, com senha em hash `scrypt` (mínimo de 10 caracteres).
+- **Sessão:** cookie assinado com `SESSION_SECRET`, `HttpOnly` e `SameSite=Strict`, que expira em `SESSION_MAX_AGE_HOURS` (padrão: 8 h).
+- **Bloqueio:** 5 tentativas erradas bloqueiam o usuário e o IP por 15 minutos.
+- **Efeito imediato:** um usuário bloqueado ou removido perde o acesso na próxima requisição.
+- **HTTPS:** se a interface for servida por HTTPS (atrás de um proxy reverso), defina `SESSION_COOKIE_SECURE=true`.
+
+Gestão de usuários:
+
+```bash
+docker compose exec web python -m dynabilling.auth add <usuario>       # cria (pede a senha)
+docker compose exec web python -m dynabilling.auth passwd <usuario>    # troca a senha
+docker compose exec web python -m dynabilling.auth disable <usuario>   # bloqueia o acesso
+docker compose exec web python -m dynabilling.auth enable <usuario>    # libera de novo
+docker compose exec web python -m dynabilling.auth delete <usuario>    # remove
+docker compose exec web python -m dynabilling.auth list                # lista
+```
+
 ## Banco de dados
 
-O schema está em [db/init/01_schema.sql](db/init/01_schema.sql) e é aplicado automaticamente na primeira subida do MySQL. A tabela principal é `daily_cost`, com uma linha por dia × ambiente × capability.
+O schema está em [app/dynabilling/schema.sql](app/dynabilling/schema.sql). A aplicação o aplica automaticamente ao iniciar, de forma idempotente, o que também funciona no RDS. A tabela principal é `daily_cost`, com uma linha por dia × ambiente × capability.
 
 Para acessar o banco direto:
 
@@ -140,3 +162,7 @@ docker compose exec mysql mysql -udyna -p dyna_billing
 ```bash
 docker compose run --rm --no-deps web python -m pytest -q tests
 ```
+
+## Deploy na AWS
+
+Terraform e scripts em [infra/](infra/). O passo a passo está em [infra/README.md](infra/README.md).

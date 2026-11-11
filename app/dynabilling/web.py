@@ -7,17 +7,102 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from fastapi import FastAPI, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
-from fastapi.templating import Jinja2Templates
+import logging
+import os
+import secrets
 
-from . import budget, config, fx
+from fastapi import FastAPI, Form, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.templating import Jinja2Templates
+from starlette.middleware.sessions import SessionMiddleware
+
+from . import auth, budget, config, fx, migrate
 from .db import query, session
 
+log = logging.getLogger("web")
 BASE = Path(__file__).parent
-app = FastAPI(title="Dynatrace Billing")
+app = FastAPI(title="Dynatrace Billing", docs_url=None, redoc_url=None, openapi_url=None)
 templates = Jinja2Templates(directory=str(BASE / "templates"))
 S = config.load()
+throttle = auth.LoginThrottle()
+
+PUBLIC_PATHS = {"/login", "/health"}
+
+
+@app.on_event("startup")
+def _startup() -> None:
+    migrate.migrate(S)
+
+
+# --------------------------------------------------------------------------- autenticação
+
+@app.middleware("http")
+async def require_login(request: Request, call_next):
+    if request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+    user = request.session.get("user")
+    if user and auth.is_active(S, user):
+        request.state.user = user
+        resp = await call_next(request)
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    request.session.clear()
+    if request.url.path.startswith("/api/"):
+        return JSONResponse({"detail": "não autenticado"}, status_code=401)
+    nxt = request.url.path + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(f"/login?next={nxt}", status_code=303)
+
+
+def _safe_next(nxt: str | None) -> str:
+    # evita open redirect: só caminhos locais
+    return nxt if nxt and nxt.startswith("/") and not nxt.startswith("//") and "\\" not in nxt else "/"
+
+
+@app.get("/login", response_class=HTMLResponse)
+def login_form(request: Request, next: str | None = None):
+    if request.session.get("user"):
+        return RedirectResponse(_safe_next(next), status_code=303)
+    return templates.TemplateResponse(request, "login.html", {"next": _safe_next(next)})
+
+
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(request: Request, username: str = Form(...), password: str = Form(...), next: str = Form("/")):
+    username = username.strip()
+    ip = request.client.host if request.client else "?"
+    keys = (f"user:{username.lower()}", f"ip:{ip}")
+    ctx = {"next": _safe_next(next), "username": username}
+    if throttle.locked(*keys):
+        log.warning("login bloqueado: usuario=%s ip=%s", username, ip)
+        ctx["error"] = "Muitas tentativas. Aguarde 15 minutos e tente novamente."
+        return templates.TemplateResponse(request, "login.html", ctx, status_code=429)
+    if not auth.authenticate(S, username, password):
+        throttle.fail(*keys)
+        log.warning("login falhou: usuario=%s ip=%s", username, ip)
+        ctx["error"] = "Usuário ou senha inválidos."
+        return templates.TemplateResponse(request, "login.html", ctx, status_code=401)
+    throttle.reset(*keys)
+    request.session.clear()
+    request.session["user"] = username
+    log.info("login ok: usuario=%s ip=%s", username, ip)
+    return RedirectResponse(_safe_next(next), status_code=303)
+
+
+@app.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse("/login", status_code=303)
+
+
+_secret = os.getenv("SESSION_SECRET")
+if not _secret:
+    _secret = secrets.token_urlsafe(48)
+    log.warning("SESSION_SECRET não definido: usando chave temporária (sessões caem a cada reinício)")
+# adicionado por último => executa antes do require_login, que depende de request.session
+app.add_middleware(
+    SessionMiddleware, secret_key=_secret, session_cookie="dynabilling_session",
+    max_age=auth.SESSION_MAX_AGE, same_site="strict",
+    https_only=os.getenv("SESSION_COOKIE_SECURE", "false").lower() in ("1", "true", "yes"),
+)
 
 
 # --------------------------------------------------------------------------- helpers
@@ -60,7 +145,7 @@ def _f(v) -> float:
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    return templates.TemplateResponse(request, "index.html", {})
+    return templates.TemplateResponse(request, "index.html", {"user": request.state.user})
 
 
 # --------------------------------------------------------------------------- API

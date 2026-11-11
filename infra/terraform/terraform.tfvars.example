@@ -1,0 +1,35 @@
+# Copie para terraform.tfvars e ajuste.
+
+aws_region = "sa-east-1"
+project    = "dyna-billing"
+
+# Quem pode acessar a interface web (rede corporativa / VPN). Obrigatório.
+allowed_cidrs = ["203.0.113.0/24"]
+
+# HTTPS (fortemente recomendado): certificado ACM emitido na MESMA região.
+acm_certificate_arn = ""
+# Opcional: cria o registro DNS no Route53
+route53_zone_id = ""
+domain_name     = ""
+
+# Configuração não sensível da aplicação (mesmas chaves do .env).
+# Credenciais Dynatrace NÃO vão aqui: use infra/scripts/set-dynatrace-secret.sh
+app_env = {
+  DT_ACCOUNT_UUID        = "bea4093f-6b89-4ab9-8b54-98af6e69d1e5"
+  DT_SUBSCRIPTION_UUID   = ""
+  CONTRACT_START_DATE    = ""
+  CONTRACT_END_DATE      = "2029-03-31"
+  CONTRACT_TOTAL_CREDITS = ""
+  AVG_WINDOW_DAYS        = "3"
+  REFRESH_DAYS           = "3"
+  FX_MODE                = "ptax"
+}
+
+# Banco
+db_instance_class        = "db.t4g.micro"
+db_multi_az              = false
+db_backup_retention_days = 7
+db_deletion_protection   = true
+
+# Coletor: a cada 6 horas
+collector_schedule = "rate(6 hours)"

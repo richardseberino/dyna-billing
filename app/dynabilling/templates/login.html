@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Entrar · Dynatrace Billing</title>
+<style>
+:root { color-scheme: light; --page:#f9f9f7; --surface:#fcfcfb; --text:#0b0b0b; --text-2:#52514e;
+  --axis:#c3c2b7; --border:rgba(11,11,11,0.10); --accent:#2a78d6; --critical:#d03b3b; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) { color-scheme: dark; --page:#0d0d0d; --surface:#1a1a19; --text:#f0efec;
+    --text-2:#c3c2b7; --axis:#383835; --border:rgba(255,255,255,0.10); --accent:#3987e5; }
+}
+:root[data-theme="dark"] { color-scheme: dark; --page:#0d0d0d; --surface:#1a1a19; --text:#f0efec;
+  --text-2:#c3c2b7; --axis:#383835; --border:rgba(255,255,255,0.10); --accent:#3987e5; }
+* { box-sizing: border-box; }
+body { margin:0; min-height:100vh; display:grid; place-items:center; padding:16px; background:var(--page);
+  color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+form { width:100%; max-width:340px; background:var(--surface); border:1px solid var(--border);
+  border-radius:10px; padding:24px; display:flex; flex-direction:column; gap:14px; }
+h1 { font-size:18px; margin:0; }
+.sub { color:var(--text-2); font-size:13px; margin-top:-8px; }
+label { display:flex; flex-direction:column; gap:4px; font-size:12px; color:var(--text-2); }
+input { font:inherit; color:var(--text); background:var(--surface); border:1px solid var(--axis);
+  border-radius:6px; padding:8px 10px; }
+input:focus { outline:2px solid var(--accent); outline-offset:-1px; }
+button { font:inherit; font-weight:600; color:#fff; background:var(--accent); border:0; border-radius:6px;
+  padding:9px; cursor:pointer; }
+.error { color:var(--critical); font-size:13px; border:1px solid var(--critical); border-radius:6px; padding:8px 10px; }
+</style>
+</head>
+<body>
+<form method="post" action="/login">
+  <h1>Dynatrace Billing</h1>
+  <div class="sub">Entre para acessar os dados de consumo.</div>
+  {% if error %}<div class="error" role="alert">✕ {{ error }}</div>{% endif %}
+  <label>Usuário <input name="username" autocomplete="username" required autofocus value="{{ username or '' }}"></label>
+  <label>Senha <input name="password" type="password" autocomplete="current-password" required></label>
+  <input type="hidden" name="next" value="{{ next or '/' }}">
+  <button type="submit">Entrar</button>
+</form>
+</body>
+</html>

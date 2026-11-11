@@ -77,6 +77,9 @@ td.num, th.num { text-align:right; font-variant-numeric: tabular-nums; }
   border-radius: 8px; padding: 10px 12px; margin-bottom: 16px; }
 .row-actions { display:flex; justify-content:space-between; align-items:center; margin-bottom: 10px; gap: 8px; flex-wrap: wrap; }
 a { color: var(--accent); }
+.user-box { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+.user-box form { margin:0; }
+button.link { border:0; background:none; padding:0; color: var(--accent); text-decoration: underline; font-size: 13px; }
 </style>
 </head>
 <body>
@@ -86,7 +89,12 @@ a { color: var(--accent); }
       <h1>Dynatrace Billing</h1>
       <div class="sub" id="subinfo">carregando…</div>
     </div>
-    <div class="sub" id="runinfo"></div>
+    <div class="user-box">
+      <div class="sub" id="runinfo"></div>
+      <form method="post" action="/logout" class="sub">
+        {{ user }} · <button type="submit" class="link">Sair</button>
+      </form>
+    </div>
   </header>
 
   <div id="notice"></div>
@@ -165,7 +173,12 @@ function badge(st) {
 let summary = null, filterMeta = null, envColor = {};
 const charts = {};
 
-async function j(url) { const r = await fetch(url); if (!r.ok) throw new Error(await r.text()); return r.json(); }
+async function j(url) {
+  const r = await fetch(url, { credentials: 'same-origin' });
+  if (r.status === 401) { location.href = '/login?next=' + encodeURIComponent(location.pathname); throw new Error('sessão expirada'); }
+  if (!r.ok) throw new Error(await r.text());
+  return r.json();
+}
 
 function params() {
   const p = new URLSearchParams();
@@ -263,7 +276,9 @@ function baseOpts() {
   return {
     responsive: true, maintainAspectRatio: false, animation: false,
     plugins: { legend: { display: false },
-      tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${brl(c.parsed.y ?? c.parsed.x)}` } } },
+      // em barras horizontais (indexAxis 'y') o valor está em x; parsed.y seria o índice da categoria
+      tooltip: { callbacks: { label: c =>
+        ` ${c.dataset.label}: ${brl(c.chart.options.indexAxis === 'y' ? c.parsed.x : c.parsed.y)}` } } },
   };
 }
 
@@ -310,6 +325,9 @@ async function loadBreakdown() {
   const caps = b.by_capability.slice(0, 12);
   const opts = baseOpts();
   opts.indexAxis = 'y';
+  const capTotal = b.by_capability.reduce((a, c) => a + c.cost_brl, 0);
+  opts.plugins.tooltip.callbacks.label = c =>
+    ` ${brl(c.parsed.x)} · ${PCT(capTotal ? c.parsed.x / capTotal * 100 : 0)} do período`;
   opts.scales = {
     x: { beginAtZero: true, grid: { color: css('--grid') }, border: { display: false },
          ticks: { color: css('--muted'), maxRotation: 0, maxTicksLimit: 5,

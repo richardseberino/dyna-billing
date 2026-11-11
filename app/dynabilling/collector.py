@@ -13,7 +13,7 @@ import logging
 import time
 from datetime import date, timedelta
 
-from . import config, fx
+from . import config, fx, migrate
 from .db import query, session
 from .dynatrace import make_client
 
@@ -130,6 +130,7 @@ def main() -> None:
     p.add_argument("--to", dest="date_to", type=date.fromisoformat)
     a = p.parse_args()
     s = config.load()
+    migrate.migrate(s)
 
     if a.once or a.date_from:
         run_once(s, a.date_from, a.date_to)
