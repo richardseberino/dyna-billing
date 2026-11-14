@@ -80,6 +80,19 @@ a { color: var(--accent); }
 .user-box { display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
 .user-box form { margin:0; }
 button.link { border:0; background:none; padding:0; color: var(--accent); text-decoration: underline; font-size: 13px; }
+.env-grid { display:grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-top: 16px; }
+.env-col { border:1px solid var(--border); border-radius: 8px; padding: 12px; min-width: 0; }
+.env-col h3 { font-size: 14px; margin: 0; display:flex; align-items:center; gap: 8px; }
+.env-col h3 i { width:10px; height:10px; border-radius:2px; display:inline-block; flex: none; }
+.env-col .tot { font-size: 20px; font-weight: 650; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.env-col .list { max-height: 300px; overflow:auto; margin-top: 8px; }
+.cap-row { display:grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 3px 10px; font-size: 12px;
+  padding: 6px 0; border-bottom: 1px solid var(--grid); align-items: baseline; }
+.cap-row .name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color: var(--text-2); }
+.cap-row .v { font-variant-numeric: tabular-nums; text-align:right; }
+.cap-row .p { font-variant-numeric: tabular-nums; text-align:right; color: var(--muted); min-width: 44px; }
+.cap-row .bar { grid-column: 1 / -1; height: 4px; background: var(--grid); border-radius: 2px; }
+.cap-row .bar span { display:block; height:100%; border-radius: 2px; }
 </style>
 </head>
 <body>
@@ -134,6 +147,13 @@ button.link { border:0; background:none; padding:0; color: var(--accent); text-d
       <h2>Custo por recurso no período (R$)</h2>
       <div class="chart-box"><canvas id="ch-cap" aria-label="Custo por recurso"></canvas></div>
     </div>
+  </section>
+
+  <section class="card" style="margin-bottom:16px;">
+    <h2>Custo por ambiente e tipo de recurso no período (R$)</h2>
+    <div class="legend" id="legend-envcap"></div>
+    <div class="chart-box" id="envcap-box" style="height:220px;"><canvas id="ch-envcap" aria-label="Custo por ambiente detalhado por recurso"></canvas></div>
+    <div class="env-grid" id="env-grid"></div>
   </section>
 
   <section class="card" style="margin-bottom:16px;">
@@ -342,6 +362,8 @@ async function loadBreakdown() {
     options: opts,
   });
 
+  renderEnvCaps(b);
+
   const total = b.matrix.reduce((a, r) => a + r.cost_brl, 0);
   // contrato já em BRL: a coluna na moeda original seria idêntica à de R$
   const showOrig = !!b.currency && b.currency.toUpperCase() !== 'BRL';
@@ -352,6 +374,71 @@ async function loadBreakdown() {
       <td>${esc(r.unit || '')}</td>${showOrig ? `<td class="num">${NUM.format(r.cost)}</td>` : ''}<td class="num">${brl(r.cost_brl)}</td>
       <td class="num">${PCT(total ? r.cost_brl / total * 100 : 0)}</td></tr>`).join('') +
     `<tr><th colspan="${showOrig ? 5 : 4}">Total</th><th class="num">${brl(total)}</th><th class="num">100%</th></tr></tbody>`;
+}
+
+// Quadro por ambiente: barra empilhada por recurso + lista detalhada de cada ambiente
+function renderEnvCaps(b) {
+  const envs = b.by_environment;  // já ordenado por custo desc
+  const allCaps = b.by_capability;
+  // > 8 recursos: 7 maiores com cor própria, resto agrupado em "Outros" no gráfico
+  const top = allCaps.length > 8 ? allCaps.slice(0, 7) : allCaps;
+  const slots = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+  const capColor = {};
+  top.forEach((c, i) => capColor[c.id] = slots[i]);
+  const series = top.map(c => ({ id: c.id, name: c.name, color: capColor[c.id] }));
+  if (allCaps.length > top.length) series.push({ id: '__other', name: 'Outros', color: '--muted' });
+
+  const cell = {};
+  for (const r of b.matrix) {
+    const k = r.env + '|' + (capColor[r.cap] ? r.cap : '__other');
+    cell[k] = (cell[k] || 0) + r.cost_brl;
+  }
+  const grand = envs.reduce((a, e) => a + e.cost_brl, 0);
+
+  document.getElementById('legend-envcap').innerHTML =
+    series.map(s => `<span><i style="background:var(${s.color})"></i>${esc(s.name)}</span>`).join('');
+  document.getElementById('envcap-box').style.height = Math.max(140, envs.length * 56 + 50) + 'px';
+
+  const surface = css('--surface');
+  const opts = baseOpts();
+  opts.indexAxis = 'y';
+  opts.interaction = { mode: 'nearest', intersect: true };
+  opts.plugins.tooltip.callbacks.title = items => items[0].label;
+  opts.plugins.tooltip.callbacks.label = c => {
+    const envTotal = envs[c.dataIndex]?.cost_brl || 0;
+    return ` ${c.dataset.label}: ${brl(c.parsed.x)} · ${PCT(envTotal ? c.parsed.x / envTotal * 100 : 0)} do ambiente`;
+  };
+  opts.plugins.tooltip.callbacks.footer = items => 'Total do ambiente: ' + brl(envs[items[0].dataIndex]?.cost_brl || 0);
+  opts.scales = {
+    x: { stacked: true, beginAtZero: true, grid: { color: css('--grid') }, border: { display: false },
+         ticks: { color: css('--muted'), maxRotation: 0, maxTicksLimit: 6,
+                  callback: v => 'R$ ' + new Intl.NumberFormat('pt-BR', {notation: 'compact'}).format(v) } },
+    y: { stacked: true, grid: { display: false }, ticks: { color: css('--text-2') } },
+  };
+  charts.envcap?.destroy();
+  charts.envcap = new Chart(document.getElementById('ch-envcap'), {
+    type: 'bar',
+    data: { labels: envs.map(e => e.name), datasets: series.map(s => ({
+      label: s.name, data: envs.map(e => cell[e.id + '|' + s.id] || 0),
+      backgroundColor: css(s.color), borderColor: surface, borderWidth: { right: 2 }, borderSkipped: 'start',
+      barPercentage: 0.7 })) },
+    options: opts,
+  });
+
+  document.getElementById('env-grid').innerHTML = envs.map(e => {
+    const rows = b.matrix.filter(r => r.env === e.id).sort((x, y) => y.cost_brl - x.cost_brl);
+    return `<div class="env-col">
+      <h3><i style="background:var(${envColor[e.id] || '--s8'})"></i>${esc(e.name)}</h3>
+      <div class="tot">${brl(e.cost_brl)}</div>
+      <div class="sub">${PCT(grand ? e.cost_brl / grand * 100 : 0)} do total do período · ${rows.length} recursos</div>
+      <div class="list">${rows.map(r => {
+        const pct = e.cost_brl ? r.cost_brl / e.cost_brl * 100 : 0;
+        return `<div class="cap-row" title="${esc(r.cap_name)} · uso ${NUM.format(r.usage_value)} ${esc(r.unit || '')}">
+          <span class="name">${esc(r.cap_name)}</span><span class="v">${brl(r.cost_brl)}</span><span class="p">${PCT(pct)}</span>
+          <span class="bar"><span style="width:${Math.min(pct, 100)}%; background:var(${capColor[r.cap] || '--muted'})"></span></span>
+        </div>`; }).join('')}</div>
+    </div>`;
+  }).join('') || '<div class="sub">Sem dados no período.</div>';
 }
 
 async function loadRows() {
