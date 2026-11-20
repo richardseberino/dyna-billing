@@ -292,6 +292,129 @@ def breakdown(start: date | None = None, end: date | None = None,
                 "currency": rate["currency"], "fx_rate": r}
 
 
+# expressão SQL que leva cada dia ao início do seu balde (semana começa na segunda)
+BUCKET_SQL = {
+    "day": "c.usage_date",
+    "week": "DATE_SUB(c.usage_date, INTERVAL WEEKDAY(c.usage_date) DAY)",
+    "month": "DATE_SUB(c.usage_date, INTERVAL DAYOFMONTH(c.usage_date) - 1 DAY)",
+}
+
+
+def bucket_bounds(bucket: str, b0: date) -> tuple[date, date]:
+    """Primeiro e último dia do balde que começa em b0."""
+    if bucket == "day":
+        return b0, b0
+    if bucket == "week":
+        return b0, b0 + timedelta(days=6)
+    nxt = date(b0.year + (b0.month == 12), b0.month % 12 + 1, 1)
+    return b0, nxt - timedelta(days=1)
+
+
+def bucket_starts(bucket: str, start: date, end: date) -> list[date]:
+    """Início de todos os baldes que tocam [start, end], inclusive os sem custo."""
+    b = start
+    if bucket == "week":
+        b = start - timedelta(days=start.weekday())
+    elif bucket == "month":
+        b = start.replace(day=1)
+    out = []
+    while b <= end:
+        out.append(b)
+        b = bucket_bounds(bucket, b)[1] + timedelta(days=1)
+    return out
+
+
+def auto_bucket(start: date, end: date) -> str:
+    n = (end - start).days + 1
+    return "day" if n <= 62 else "week" if n <= 200 else "month"
+
+
+@app.get("/api/timeseries")
+def timeseries(start: date | None = None, end: date | None = None,
+               env: list[str] | None = Query(None), cap: list[str] | None = Query(None),
+               by: str = Query("cap", pattern="^(cap|env)$"),
+               bucket: str = Query("auto", pattern="^(auto|day|week|month)$")):
+    """Custo em BRL por recurso (ou ambiente) agregado por dia/semana/mês, mais o período anterior equivalente."""
+    with session(S) as conn:
+        sub, rate = _ctx(conn)
+        if not sub:
+            return {"bucket": "day", "buckets": [], "series": []}
+        rng = query(conn, "SELECT MIN(usage_date) mn, MAX(usage_date) mx FROM daily_cost WHERE subscription_uuid=%s",
+                    (sub["uuid"],))[0]
+        if rng["mn"] is None:
+            return {"bucket": "day", "buckets": [], "series": []}
+        start = start or rng["mn"]
+        end = end or rng["mx"]
+        if bucket == "auto":
+            bucket = auto_bucket(start, end)
+        r = _f(rate["rate"])
+
+        if by == "cap":
+            key, name, join = "c.capability_key", "MAX(c.capability_name)", ""
+        else:
+            key = "c.environment_id"
+            name = "COALESCE(NULLIF(MAX(e.name),''), c.environment_id)"
+            join = "LEFT JOIN environments e ON e.environment_id=c.environment_id"
+
+        where, params = _filters(env, cap, start, end, sub["uuid"])
+        rows = query(conn, f"""SELECT {BUCKET_SQL[bucket]} b, {key} id, {name} name, SUM(c.cost) cost
+                               FROM daily_cost c {join} WHERE {where}
+                               GROUP BY b, {key} ORDER BY b""", params)
+
+        # período anterior com o mesmo número de dias, terminando na véspera de `start`
+        n_days = (end - start).days + 1
+        p_end = start - timedelta(days=1)
+        p_start = p_end - timedelta(days=n_days - 1)
+        where, params = _filters(env, cap, p_start, p_end, sub["uuid"])
+        prev = query(conn, f"""SELECT {key} id, {name} name, SUM(c.cost) cost
+                               FROM daily_cost c {join} WHERE {where} GROUP BY {key}""", params)
+
+        # último dia analisado (limitado ao último dia com dados) × último dia do período anterior
+        last_day = min(end, rng["mx"])
+        day_cost: dict[str, dict] = {}
+        for k, d in (("last_day", last_day), ("prev_last_day", p_end)):
+            where, params = _filters(env, cap, d, d, sub["uuid"])
+            for x in query(conn, f"""SELECT {key} id, {name} name, SUM(c.cost) cost
+                                     FROM daily_cost c {join} WHERE {where} GROUP BY {key}""", params):
+                day_cost.setdefault(x["id"], {"name": x["name"]})[k] = _f(x["cost"]) * r
+
+        buckets = bucket_starts(bucket, start, end)
+        idx = {b: i for i, b in enumerate(buckets)}
+        series: dict[str, dict] = {}
+
+        def get(sid, sname):
+            return series.setdefault(sid, {"id": sid, "name": sname, "values": [0.0] * len(buckets),
+                                           "total": 0.0, "previous": 0.0, "last_day": 0.0, "prev_last_day": 0.0})
+        for x in rows:
+            s = get(x["id"], x["name"])
+            v = _f(x["cost"]) * r
+            s["values"][idx[x["b"]]] = round(v, 2)
+            s["total"] += v
+        for x in prev:
+            get(x["id"], x["name"])["previous"] = _f(x["cost"]) * r
+        for sid, x in day_cost.items():
+            s = get(sid, x["name"])
+            s["last_day"], s["prev_last_day"] = x.get("last_day", 0.0), x.get("prev_last_day", 0.0)
+        for s in series.values():
+            for k in ("total", "previous", "last_day", "prev_last_day"):
+                s[k] = round(s[k], 2)
+
+        out_buckets = []
+        for b in buckets:
+            b0, b1 = bucket_bounds(bucket, b)
+            lo, hi = max(b0, start), min(b1, end)
+            out_buckets.append({"start": b0.isoformat(), "end": b1.isoformat(),
+                                "days": (hi - lo).days + 1, "full_days": (b1 - b0).days + 1})
+        return {
+            "bucket": bucket, "by": by, "start": start.isoformat(), "end": end.isoformat(), "days": n_days,
+            "buckets": out_buckets, "last_day": last_day.isoformat(),
+            "series": sorted(series.values(), key=lambda s: -s["total"]),
+            "previous": {"start": p_start.isoformat(), "end": p_end.isoformat(),
+                         # só é comparável se a coleta já cobria o período anterior inteiro
+                         "complete": rng["mn"] <= p_start},
+        }
+
+
 def _detail_rows(conn, sub, rate, start, end, env, cap, limit: int | None):
     where, params = _filters(env, cap, start, end, sub["uuid"])
     sql = f"""SELECT c.usage_date, c.environment_id, COALESCE(NULLIF(e.name,''), c.environment_id) environment_name,

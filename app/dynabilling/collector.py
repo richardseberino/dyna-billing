@@ -63,6 +63,18 @@ def _upsert_rows(conn, sub_uuid: str, rows: list[dict]) -> int:
     return len(rows)
 
 
+STALE_LOOKBACK_DAYS = 45
+
+
+def _incomplete_day(conn, sub_uuid: str, since: date) -> date | None:
+    """Primeiro dia desde `since` com uso registrado mas custo total zero (custo ainda não fechado na coleta)."""
+    r = query(conn, """SELECT MIN(d) d FROM (
+                           SELECT usage_date d FROM daily_cost WHERE subscription_uuid=%s AND usage_date >= %s
+                           GROUP BY usage_date HAVING SUM(cost) = 0 AND SUM(COALESCE(usage_value,0)) > 0) t""",
+              (sub_uuid, since))
+    return r[0]["d"] if r else None
+
+
 def run_once(s: config.Settings, date_from: date | None = None, date_to: date | None = None) -> int:
     client = make_client(s)
     today = date.today()
@@ -90,6 +102,12 @@ def run_once(s: config.Settings, date_from: date | None = None, date_to: date | 
                     date_from = start if start else today - timedelta(days=s.backfill_days)
                 else:
                     date_from = min(last + timedelta(days=1), today - timedelta(days=s.refresh_days))
+                    # a Dynatrace publica o uso antes do custo: um dia coletado cedo demais fica com custo 0.
+                    # se o coletor ficar parado mais que REFRESH_DAYS, esse dia sairia da janela para sempre.
+                    stale = _incomplete_day(conn, sub["uuid"], today - timedelta(days=STALE_LOOKBACK_DAYS))
+                    if stale and stale < date_from:
+                        log.warning("Dia %s tem uso mas custo zero: recoletando a partir dele", stale)
+                        date_from = stale
                 if sub["start_date"]:
                     date_from = max(date_from, sub["start_date"])
             # o dia corrente ainda não tem custo fechado na Dynatrace: coleta sempre até D-1

@@ -93,6 +93,19 @@ button.link { border:0; background:none; padding:0; color: var(--accent); text-d
 .cap-row .p { font-variant-numeric: tabular-nums; text-align:right; color: var(--muted); min-width: 44px; }
 .cap-row .bar { grid-column: 1 / -1; height: 4px; background: var(--grid); border-radius: 2px; }
 .cap-row .bar span { display:block; height:100%; border-radius: 2px; }
+.ts-controls { display:flex; gap: 8px; flex-wrap: wrap; }
+.seg { display:inline-flex; }
+.seg button { border-radius: 0; margin-left: -1px; padding: 4px 10px; font-size: 13px; color: var(--text-2); }
+.seg button:first-child { border-radius: 6px 0 0 6px; margin-left: 0; }
+.seg button:last-child { border-radius: 0 6px 6px 0; }
+.seg button.active { color: var(--text); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); position: relative; }
+.ts-legend button { border: 0; background: none; padding: 2px 0; display:inline-flex; align-items:center; gap:6px;
+  font-size: 12px; color: var(--text-2); }
+.ts-legend button.off { opacity: .4; text-decoration: line-through; }
+.ts-legend .hint { color: var(--muted); }
+.delta-up { color: var(--critical); }
+.delta-down { color: var(--good-text); }
+tr.off td { opacity: .45; }
 </style>
 </head>
 <body>
@@ -147,6 +160,27 @@ button.link { border:0; background:none; padding:0; color: var(--accent); text-d
       <h2>Custo por recurso no período (R$)</h2>
       <div class="chart-box"><canvas id="ch-cap" aria-label="Custo por recurso"></canvas></div>
     </div>
+  </section>
+
+  <section class="card" style="margin-bottom:16px;">
+    <div class="row-actions">
+      <h2 style="margin:0;" id="ts-title">Custo por recurso ao longo do período (R$)</h2>
+      <div class="ts-controls">
+        <div class="seg" id="ts-by" role="group" aria-label="Agrupar por">
+          <button data-v="cap" class="active">Recurso</button><button data-v="env">Ambiente</button>
+        </div>
+        <div class="seg" id="ts-bucket" role="group" aria-label="Granularidade">
+          <button data-v="auto" class="active">Auto</button><button data-v="day">Dia</button><button data-v="week">Semana</button><button data-v="month">Mês</button>
+        </div>
+        <div class="seg" id="ts-mode" role="group" aria-label="Modo">
+          <button data-v="stack" class="active">Empilhado</button><button data-v="group">Lado a lado</button>
+        </div>
+      </div>
+    </div>
+    <div class="legend ts-legend" id="legend-ts"></div>
+    <div class="chart-box" style="height:360px;"><canvas id="ch-ts" aria-label="Custo por recurso ao longo do tempo"></canvas></div>
+    <div class="sub" id="ts-note" style="margin:8px 0 12px;"></div>
+    <div class="table-wrap"><table id="t-ts"></table></div>
   </section>
 
   <section class="card" style="margin-bottom:16px;">
@@ -441,6 +475,159 @@ function renderEnvCaps(b) {
   }).join('') || '<div class="sub">Sem dados no período.</div>';
 }
 
+// ------------------------------------------------------------------ histograma por recurso no tempo
+const ts = { by: 'cap', bucket: 'auto', mode: 'stack', hidden: new Set(), data: null };
+const MONTHS = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+const MONTHS_FULL = ['janeiro','fevereiro','março','abril','maio','junho','julho','agosto','setembro','outubro','novembro','dezembro'];
+const BUCKET_LABEL = { day: 'dia', week: 'semana', month: 'mês' };
+
+function bucketTick(b, bucket) {
+  const [y, m, d] = b.start.split('-');
+  if (bucket === 'month') return `${MONTHS[+m - 1]}/${y.slice(2)}`;
+  return `${d}/${m}`;
+}
+function bucketTitle(b, bucket) {
+  const [y, m] = b.start.split('-');
+  let t = bucket === 'day' ? fmtDate(b.start)
+        : bucket === 'week' ? `Semana ${fmtDate(b.start).slice(0, 5)} – ${fmtDate(b.end).slice(0, 5)}`
+        : `${MONTHS_FULL[+m - 1]} de ${y}`;
+  if (b.days < b.full_days) t += ` (parcial: ${b.days} de ${b.full_days} dias)`;
+  return t;
+}
+
+async function loadTimeseries() {
+  const p = params(); p.set('by', ts.by); p.set('bucket', ts.bucket);
+  ts.data = await j('/api/timeseries?' + p);
+  renderTimeseries();
+}
+
+function renderTimeseries() {
+  const d = ts.data, bucket = d.bucket;
+  const slots = ['--s1','--s2','--s3','--s4','--s5','--s6','--s7','--s8'];
+  let shown = d.series, rest = [];
+  if (shown.length > 8) { rest = shown.slice(7); shown = shown.slice(0, 7); }
+  const color = (s, i) => ts.by === 'env' ? (envColor[s.id] || '--s8') : slots[i];
+  const series = shown.map((s, i) => ({ ...s, color: color(s, i) }));
+  if (rest.length) series.push({ id: '__other', name: `Outros (${rest.length})`, color: '--muted',
+    values: d.buckets.map((_, i) => rest.reduce((a, s) => a + s.values[i], 0)),
+    total: rest.reduce((a, s) => a + s.total, 0), previous: rest.reduce((a, s) => a + s.previous, 0) });
+
+  const what = ts.by === 'cap' ? 'recurso' : 'ambiente';
+  document.getElementById('ts-title').textContent =
+    `Custo por ${what} por ${BUCKET_LABEL[bucket]} (R$)`;
+
+  document.getElementById('legend-ts').innerHTML = series.map(s =>
+    `<button data-id="${esc(s.id)}" class="${ts.hidden.has(s.id) ? 'off' : ''}" title="Clique para mostrar/ocultar">
+       <i style="background:var(${s.color})"></i>${esc(s.name)}</button>`).join('') +
+    (series.length > 1 ? `<span class="hint">· clique para ocultar; duplo clique para isolar</span>` : '');
+
+  const stacked = ts.mode === 'stack';
+  const surface = css('--surface');
+  const datasets = series.map(s => ({
+    label: s.name, data: s.values, hidden: ts.hidden.has(s.id), _id: s.id,
+    backgroundColor: css(s.color),
+    ...(stacked ? { stack: 'cost', borderColor: surface, borderWidth: { top: 2 }, borderSkipped: 'bottom' }
+                : { borderRadius: 3, borderSkipped: 'bottom', categoryPercentage: 0.8, barPercentage: 0.9 }),
+  }));
+
+  const opts = baseOpts();
+  opts.interaction = { mode: 'index', intersect: false };
+  opts.plugins.tooltip.itemSort = (a, b) => b.parsed.y - a.parsed.y;
+  opts.plugins.tooltip.filter = i => i.parsed.y > 0;
+  opts.plugins.tooltip.callbacks.title = items => bucketTitle(d.buckets[items[0].dataIndex], bucket);
+  opts.plugins.tooltip.callbacks.label = c => {
+    const tot = c.chart.data.datasets.reduce((a, ds, k) => a + (c.chart.isDatasetVisible(k) ? ds.data[c.dataIndex] : 0), 0);
+    return ` ${c.dataset.label}: ${brl(c.parsed.y)} · ${PCT(tot ? c.parsed.y / tot * 100 : 0)}`;
+  };
+  opts.plugins.tooltip.callbacks.footer = items => {
+    const b = d.buckets[items[0].dataIndex];
+    const tot = items.reduce((a, i) => a + i.parsed.y, 0);
+    return `Total: ${brl(tot)}` + (bucket !== 'day' ? ` · média ${brl(tot / b.days)}/dia` : '');
+  };
+  opts.scales = {
+    x: { stacked, grid: { display: false }, border: { color: css('--axis') },
+         ticks: { color: css('--muted'), maxRotation: 0, autoSkipPadding: 16,
+                  callback: (_, i) => bucketTick(d.buckets[i], bucket) } },
+    y: { stacked, beginAtZero: true, grid: { color: css('--grid') }, border: { display: false },
+         ticks: { color: css('--muted'), callback: v => 'R$ ' + new Intl.NumberFormat('pt-BR', {notation: 'compact'}).format(v) } },
+  };
+  charts.ts?.destroy();
+  charts.ts = new Chart(document.getElementById('ch-ts'), {
+    type: 'bar', data: { labels: d.buckets.map(b => b.start), datasets }, options: opts });
+
+  // tabela comparativa: período atual × período anterior de mesmo tamanho
+  const prevOk = d.previous?.complete;
+  const isOff = s => ts.hidden.has(s.id) || (rest.includes(s) && ts.hidden.has('__other'));
+  const visible = d.series.filter(s => !isOff(s));
+  const sum = k => visible.reduce((a, s) => a + s[k], 0);
+  const total = sum('total'), prevTotal = sum('previous');
+  const lastTotal = sum('last_day'), prevLastTotal = sum('prev_last_day');
+  const delta = (cur, prev) => {
+    if (!prevOk) return '<span class="sub">–</span>';
+    if (!prev) return cur ? '<span class="delta-up">novo</span>' : '–';
+    const pct = (cur - prev) / prev * 100;
+    const cls = pct > 0.5 ? 'delta-up' : pct < -0.5 ? 'delta-down' : '';
+    return `<span class="${cls}">${pct > 0 ? '▲ +' : pct < 0 ? '▼ ' : ''}${PCT(pct)}</span>`;
+  };
+  const dot = s => {
+    const i = shown.indexOf(s);
+    return `<i style="display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:6px;background:var(${i >= 0 ? color(s, i) : '--muted'})"></i>`;
+  };
+  document.getElementById('ts-note').textContent =
+    `${fmtDate(d.start)} → ${fmtDate(d.end)} (${d.days} dias) comparado com ${fmtDate(d.previous.start)} → ${fmtDate(d.previous.end)}` +
+    (prevOk ? '.' : ' — sem dados coletados cobrindo todo o período anterior, variação omitida.') +
+    (ts.hidden.size ? ' Totais consideram apenas os itens visíveis.' : '');
+  document.getElementById('t-ts').innerHTML =
+    `<thead><tr><th>${what === 'recurso' ? 'Recurso' : 'Ambiente'}</th>
+      <th class="num">Custo no período</th><th class="num">Período anterior</th><th class="num">Variação</th>
+      <th class="num">% do período</th>
+      <th class="num">Último dia (${fmtDate(d.last_day).slice(0, 5)})</th>
+      <th class="num">Último dia anterior (${fmtDate(d.previous.end).slice(0, 5)})</th><th class="num">Variação</th></tr></thead><tbody>` +
+    d.series.map(s => `<tr class="${isOff(s) ? 'off' : ''}"><td>${dot(s)}${esc(s.name)}</td>
+      <td class="num">${brl(s.total)}</td><td class="num">${prevOk ? brl(s.previous) : '–'}</td>
+      <td class="num">${delta(s.total, s.previous)}</td>
+      <td class="num">${isOff(s) ? '–' : PCT(total ? s.total / total * 100 : 0)}</td>
+      <td class="num">${brl(s.last_day)}</td><td class="num">${prevOk ? brl(s.prev_last_day) : '–'}</td>
+      <td class="num">${delta(s.last_day, s.prev_last_day)}</td></tr>`).join('') +
+    `<tr><th>Total</th><th class="num">${brl(total)}</th><th class="num">${prevOk ? brl(prevTotal) : '–'}</th>
+      <th class="num">${delta(total, prevTotal)}</th><th class="num">${d.series.length ? '100%' : '–'}</th>
+      <th class="num">${brl(lastTotal)}</th><th class="num">${prevOk ? brl(prevLastTotal) : '–'}</th>
+      <th class="num">${delta(lastTotal, prevLastTotal)}</th></tr></tbody>`;
+}
+
+function setSeg(id, v) {
+  document.querySelectorAll(`#${id} button`).forEach(b => b.classList.toggle('active', b.dataset.v === v));
+}
+document.getElementById('ts-by').addEventListener('click', e => {
+  const v = e.target.closest('button')?.dataset.v; if (!v || v === ts.by) return;
+  ts.by = v; ts.hidden.clear(); setSeg('ts-by', v); loadTimeseries().catch(console.error);
+});
+document.getElementById('ts-bucket').addEventListener('click', e => {
+  const v = e.target.closest('button')?.dataset.v; if (!v) return;
+  ts.bucket = v; setSeg('ts-bucket', v); loadTimeseries().catch(console.error);
+});
+document.getElementById('ts-mode').addEventListener('click', e => {
+  const v = e.target.closest('button')?.dataset.v; if (!v || !ts.data) return;
+  ts.mode = v; setSeg('ts-mode', v); renderTimeseries();
+});
+let legendClickTimer;
+document.getElementById('legend-ts').addEventListener('click', e => {
+  const id = e.target.closest('button')?.dataset.id; if (!id) return;
+  clearTimeout(legendClickTimer);
+  legendClickTimer = setTimeout(() => {
+    ts.hidden.has(id) ? ts.hidden.delete(id) : ts.hidden.add(id);
+    renderTimeseries();
+  }, 220);
+});
+document.getElementById('legend-ts').addEventListener('dblclick', e => {
+  const id = e.target.closest('button')?.dataset.id; if (!id) return;
+  clearTimeout(legendClickTimer);
+  const ids = [...document.querySelectorAll('#legend-ts button')].map(b => b.dataset.id);
+  const isolated = ts.hidden.size === ids.length - 1 && !ts.hidden.has(id);
+  ts.hidden = new Set(isolated ? [] : ids.filter(x => x !== id));
+  renderTimeseries();
+});
+
 async function loadRows() {
   const p = params();
   document.getElementById('csv').href = '/api/export.csv?' + p;
@@ -456,7 +643,7 @@ async function loadRows() {
     '</tbody>';
 }
 
-function refresh() { return Promise.all([loadDaily(), loadBreakdown(), loadRows()]).catch(e => console.error(e)); }
+function refresh() { return Promise.all([loadDaily(), loadTimeseries(), loadBreakdown(), loadRows()]).catch(e => console.error(e)); }
 
 document.querySelectorAll('.preset').forEach(b => b.addEventListener('click', () => { setPreset(b.dataset.days); refresh(); }));
 ['f-start', 'f-end'].forEach(id => document.getElementById(id).addEventListener('change', () => {
